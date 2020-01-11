@@ -281,8 +281,6 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
         let et = ext_t.map(|x| x.to_vec::<f64>(py)).transpose()?;
         let ec = ext_c.map(|x| x.to_vec::<u32>(py)).transpose()?;
 
-        println!("reactions: {:?}", reactions);
-
         // hot loop
         py.allow_threads(|| {
             let mut components = vec![0; num_components + num_ext_components];
