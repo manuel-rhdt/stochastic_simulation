@@ -1,0 +1,16 @@
+[package]
+name = "accelerate"
+version = "0.1.0"
+authors = ["Manuel Reinhardt <M.Reinhardt@amolf.nl>"]
+edition = "2018"
+
+[lib]
+name = "accelerate"
+crate-type = ["cdylib"]
+
+[dependencies]
+rand = "0.7.3"
+
+[dependencies.pyo3]
+version = "0.8.5"
+features = ["extension-module"]
