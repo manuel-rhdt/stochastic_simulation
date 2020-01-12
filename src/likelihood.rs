@@ -224,11 +224,11 @@ fn log_likelihood_inner<'a>(
     }
 }
 
-type TrajectoryArrayStd = TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>;
+type TrajectoryArrayStd<'a> = TrajectoryArray<&'a [f64], &'a [f64], &'a [u32]>;
 
 pub fn log_likelihood(
-    signal: TrajectoryArrayStd,
-    response: TrajectoryArrayStd,
+    signal: TrajectoryArrayStd<'_>,
+    response: TrajectoryArrayStd<'_>,
     reactions: &ReactionNetwork,
     out: &mut [f64],
 ) {

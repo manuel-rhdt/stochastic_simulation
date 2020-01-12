@@ -133,6 +133,21 @@ impl<T, C, R> Trajectory<T, C, R> {
         let length = self.len();
         &mut self.components.borrow_mut()[length * comp..length * (comp + 1)]
     }
+
+    fn as_ref<X: ?Sized, Y: ?Sized, Z: ?Sized>(&self) -> Trajectory<&X, &Y, &Z>
+    where
+        T: AsRef<X>,
+        C: AsRef<Y>,
+        R: AsRef<Z>,
+    {
+        Trajectory {
+            length: self.length,
+            num_components: self.num_components,
+            timestamps: self.timestamps.as_ref(),
+            components: self.components.as_ref(),
+            reaction_events: self.reaction_events.as_ref().map(AsRef::as_ref),
+        }
+    }
 }
 
 pub struct TrajectoryArray<T, C, R> {
@@ -141,6 +156,13 @@ pub struct TrajectoryArray<T, C, R> {
 }
 
 impl<T, C, R> TrajectoryArray<T, C, R> {
+    fn from_trajectory(traj: Trajectory<T, C, R>) -> Self {
+        TrajectoryArray {
+            count: 1,
+            inner: traj,
+        }
+    }
+
     fn num_steps(&self) -> usize {
         self.inner.len()
     }
@@ -152,20 +174,35 @@ impl<T, C, R> TrajectoryArray<T, C, R> {
     fn len(&self) -> usize {
         self.count
     }
-}
 
-impl<T, C, R> TrajectoryArray<Vec<T>, Vec<C>, Vec<R>> {
-    fn get<'a>(&'a self, index: usize) -> Trajectory<&'a [T], &'a [C], &'a [R]> {
+    fn as_ref<X: ?Sized, Y: ?Sized, Z: ?Sized>(&self) -> TrajectoryArray<&X, &Y, &Z>
+    where
+        T: AsRef<X>,
+        C: AsRef<Y>,
+        R: AsRef<Z>,
+    {
+        TrajectoryArray {
+            count: self.count,
+            inner: self.inner.as_ref(),
+        }
+    }
+    
+    fn get<'a, X, Y, Z>(&'a self, index: usize) -> Trajectory<&'a [X], &'a [Y], &'a [Z]>
+    where
+        T: Borrow<[X]>,
+        C: Borrow<[Y]>,
+        R: Borrow<[Z]>,
+    {
         if index >= self.len() {
             panic!("Index out of bounds")
         }
         let stride_t = self.num_steps();
         let stride_c = self.num_steps() * self.num_components();
         let stride_re = stride_t - 1;
-        let timestamps = &self.inner.timestamps[stride_t * index..stride_t * (index + 1)];
-        let components = &self.inner.components[stride_c * index..stride_c * (index + 1)];
+        let timestamps = &self.inner.timestamps.borrow()[stride_t * index..stride_t * (index + 1)];
+        let components = &self.inner.components.borrow()[stride_c * index..stride_c * (index + 1)];
         let reaction_events = if let Some(re) = &self.inner.reaction_events {
-            Some(&re[stride_re * index..stride_re * (index + 1)])
+            Some(&re.borrow()[stride_re * index..stride_re * (index + 1)])
         } else {
             None
         };
@@ -179,10 +216,15 @@ impl<T, C, R> TrajectoryArray<Vec<T>, Vec<C>, Vec<R>> {
         }
     }
 
-    fn get_mut<'a>(
+    fn get_mut<'a, X, Y, Z>(
         &'a mut self,
         index: usize,
-    ) -> Trajectory<&'a mut [T], &'a mut [C], &'a mut [R]> {
+    ) -> Trajectory<&'a mut [X], &'a mut [Y], &'a mut [Z]>
+    where
+        T: BorrowMut<[X]>,
+        C: BorrowMut<[Y]>,
+        R: BorrowMut<[Z]>,
+    {
         if index >= self.len() {
             panic!("Index out of bounds")
         }
@@ -190,10 +232,12 @@ impl<T, C, R> TrajectoryArray<Vec<T>, Vec<C>, Vec<R>> {
         let stride_c = self.num_steps() * self.num_components();
         let stride_re = stride_t - 1;
         let num_components = self.num_components();
-        let timestamps = &mut self.inner.timestamps[stride_t * index..stride_t * (index + 1)];
-        let components = &mut self.inner.components[stride_c * index..stride_c * (index + 1)];
+        let timestamps =
+            &mut self.inner.timestamps.borrow_mut()[stride_t * index..stride_t * (index + 1)];
+        let components =
+            &mut self.inner.components.borrow_mut()[stride_c * index..stride_c * (index + 1)];
         let reaction_events = if let Some(re) = &mut self.inner.reaction_events {
-            Some(&mut re[stride_re * index..stride_re * (index + 1)])
+            Some(&mut re.borrow_mut()[stride_re * index..stride_re * (index + 1)])
         } else {
             None
         };
@@ -453,31 +497,62 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
         signal: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         reactions: ReactionNetwork,
         out: PyObject,
+        outer: Option<bool>,
     ) -> PyResult<()> {
         let num_responses = response.len();
         let num_signals = signal.len();
+        let outer = outer.unwrap_or(false);
 
-        if num_responses != num_signals && !(num_responses == 1 || num_signals == 1) {
-            return TypeError::into(format!(
-                "Could not broadcast trajectory arrays with lengths {:?} and {:?}.",
-                num_responses, num_signals
-            ));
+        if !outer {
+            if num_responses != num_signals && !(num_responses == 1 || num_signals == 1) {
+                return TypeError::into(format!(
+                    "Could not broadcast trajectory arrays with lengths {:?} and {:?}.",
+                    num_responses, num_signals
+                ));
+            }
         }
 
         let out_ref = out.as_ref(py);
         let out = PyBuffer::get(py, &out_ref)?;
-        assert_dim(&out, 2, "out")?;
-        if out.shape()[0] != num_responses.max(num_signals)
-            || out.shape()[1] != response.num_steps() - 1
-        {
-            return TypeError::into("output array has wrong shape");
+
+        let mut out_vec;
+        if !outer {
+            assert_dim(&out, 2, "out")?;
+            if out.shape()[0] != num_responses.max(num_signals)
+                || out.shape()[1] != response.num_steps() - 1
+            {
+                return TypeError::into("output array has wrong shape");
+            }
+
+            out_vec = out.to_vec(py)?;
+
+            py.allow_threads(|| {
+                likelihood::log_likelihood(
+                    signal.as_ref(),
+                    response.as_ref(),
+                    &reactions,
+                    &mut out_vec,
+                );
+            });
+        } else {
+            assert_dim(&out, 3, "out")?;
+            let shape = out.shape();
+            if shape[0] != num_responses
+                || shape[1] != num_signals
+                || shape[2] != response.num_steps() - 1
+            {
+                return TypeError::into(format!("output array has wrong shape {:?}", shape));
+            }
+            out_vec = out.to_vec(py)?;
+            py.allow_threads(|| {
+                let stride = out.shape()[1] * out.shape()[2];
+                for r in 0..response.len() {
+                    let out_slice = &mut out_vec[r * stride..(r + 1) * stride];
+                    let response = TrajectoryArray::from_trajectory(response.get(r));
+                    likelihood::log_likelihood(signal.as_ref(), response, &reactions, out_slice);
+                }
+            });
         }
-
-        let mut out_vec = out.to_vec(py)?;
-
-        py.allow_threads(|| {
-            likelihood::log_likelihood(signal, response, &reactions, &mut out_vec);
-        });
 
         out.copy_from_slice(py, &out_vec)?;
 
