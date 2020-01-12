@@ -186,7 +186,7 @@ impl<T, C, R> TrajectoryArray<T, C, R> {
             inner: self.inner.as_ref(),
         }
     }
-    
+
     fn get<'a, X, Y, Z>(&'a self, index: usize) -> Trajectory<&'a [X], &'a [Y], &'a [Z]>
     where
         T: Borrow<[X]>,
@@ -421,11 +421,11 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
     #[pyfn(m, "simulate_trajectories")]
     fn simulate_trajectories(
         py: Python,
-        out: PyObject,
+        out_obj: PyObject,
         reactions: ReactionNetwork,
         ext: Option<PyObject>,
     ) -> PyResult<()> {
-        let mut traj: TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>> = out.extract(py)?;
+        let mut traj: TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>> = out_obj.extract(py)?;
         if traj.inner.reaction_events.is_none() {
             return Err(TypeError::py_err(
                 "trajectory does not contain reaction events!",
@@ -479,7 +479,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
         });
 
-        let out = out.as_ref(py);
+        let out: &PyAny = out_obj.cast_as(py)?;
         let timestamps = PyBuffer::get(py, out.getattr("timestamps")?)?;
         timestamps.copy_from_slice(py, &traj.inner.timestamps)?;
         let trajectory = PyBuffer::get(py, out.getattr("components")?)?;
@@ -496,7 +496,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
         response: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         signal: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         reactions: ReactionNetwork,
-        out: PyObject,
+        out_obj: PyObject,
         outer: Option<bool>,
     ) -> PyResult<()> {
         let num_responses = response.len();
@@ -512,9 +512,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
         }
 
-        let out_ref = out.as_ref(py);
-        let out = PyBuffer::get(py, &out_ref)?;
-
+        let out = PyBuffer::get(py, out_obj.cast_as(py)?)?;
         let mut out_vec;
         if !outer {
             assert_dim(&out, 2, "out")?;
@@ -536,7 +534,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             });
         } else {
             assert_dim(&out, 3, "out")?;
-            let shape = out.shape();
+            let shape = out.shape().to_owned();
             if shape[0] != num_responses
                 || shape[1] != num_signals
                 || shape[2] != response.num_steps() - 1
@@ -545,7 +543,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
             out_vec = out.to_vec(py)?;
             py.allow_threads(|| {
-                let stride = out.shape()[1] * out.shape()[2];
+                let stride = shape[1] * shape[2];
                 for r in 0..response.len() {
                     let out_slice = &mut out_vec[r * stride..(r + 1) * stride];
                     let response = TrajectoryArray::from_trajectory(response.get(r));
@@ -554,6 +552,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             });
         }
 
+        let out = PyBuffer::get(py, out_obj.cast_as(py)?)?;
         out.copy_from_slice(py, &out_vec)?;
 
         Ok(())
