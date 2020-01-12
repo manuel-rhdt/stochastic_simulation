@@ -1,12 +1,12 @@
 use std;
 use std::borrow::{Borrow, BorrowMut};
 
+use pyo3;
 use pyo3::buffer::{Element, PyBuffer};
 use pyo3::exceptions::TypeError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-use pyo3::{PyNativeType, AsPyPointer};
-use pyo3;
+use pyo3::PyNativeType;
 use rand;
 
 mod likelihood;
@@ -377,19 +377,18 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
     #[pyfn(m, "simulate_trajectories")]
     fn simulate_trajectories(
         py: Python,
-        out: &PyAny,
+        out: PyObject,
         reactions: ReactionNetwork,
-        ext: Option<&PyAny>,
+        ext: Option<PyObject>,
     ) -> PyResult<()> {
-        unsafe { pyo3::ffi::Py_INCREF(out.as_ptr()) };
-        let mut traj: TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>> = out.extract()?;
+        let mut traj: TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>> = out.extract(py)?;
         if traj.inner.reaction_events.is_none() {
             return Err(TypeError::py_err(
                 "trajectory does not contain reaction events!",
             ));
         }
         let ext: Option<TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>>> =
-            ext.map(|x| x.extract()).transpose()?;
+            ext.map(|x| x.extract(py)).transpose()?;
         let ext = ext.as_ref();
 
         // hot loop
@@ -436,7 +435,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
         });
 
-        println!("{:?}", out.get_refcnt());
+        let out = out.as_ref(py);
         let timestamps = PyBuffer::get(py, out.getattr("timestamps")?)?;
         timestamps.copy_from_slice(py, &traj.inner.timestamps)?;
         let trajectory = PyBuffer::get(py, out.getattr("components")?)?;
@@ -453,16 +452,20 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
         response: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         signal: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         reactions: ReactionNetwork,
-        out: &PyAny,
+        out: PyObject,
     ) -> PyResult<()> {
         let num_responses = response.len();
         let num_signals = signal.len();
 
         if num_responses != num_signals && !(num_responses == 1 || num_signals == 1) {
-            return TypeError::into("could not broadcast trajectories");
+            return TypeError::into(format!(
+                "Could not broadcast trajectory arrays with lengths {:?} and {:?}.",
+                num_responses, num_signals
+            ));
         }
 
-        let out = PyBuffer::get(py, out)?;
+        let out_ref = out.as_ref(py);
+        let out = PyBuffer::get(py, &out_ref)?;
         assert_dim(&out, 2, "out")?;
         if out.shape()[0] != num_responses.max(num_signals)
             || out.shape()[1] != response.num_steps() - 1
