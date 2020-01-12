@@ -186,7 +186,7 @@ impl<T, C, R> TrajectoryArray<T, C, R> {
             inner: self.inner.as_ref(),
         }
     }
-    
+
     fn get<'a, X, Y, Z>(&'a self, index: usize) -> Trajectory<&'a [X], &'a [Y], &'a [Z]>
     where
         T: Borrow<[X]>,
@@ -536,7 +536,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             });
         } else {
             assert_dim(&out, 3, "out")?;
-            let shape = out.shape();
+            let shape = out.shape().to_owned();
             if shape[0] != num_responses
                 || shape[1] != num_signals
                 || shape[2] != response.num_steps() - 1
@@ -545,7 +545,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
             out_vec = out.to_vec(py)?;
             py.allow_threads(|| {
-                let stride = out.shape()[1] * out.shape()[2];
+                let stride = shape[1] * shape[2];
                 for r in 0..response.len() {
                     let out_slice = &mut out_vec[r * stride..(r + 1) * stride];
                     let response = TrajectoryArray::from_trajectory(response.get(r));
