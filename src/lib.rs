@@ -1,10 +1,17 @@
 use std;
+use std::borrow::{Borrow, BorrowMut};
 
-use pyo3::buffer::PyBuffer;
+use pyo3::buffer::{Element, PyBuffer};
 use pyo3::exceptions::TypeError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
+use pyo3::{PyNativeType, AsPyPointer};
+use pyo3;
 use rand;
+
+mod likelihood;
+
+type Count = f64;
 
 #[derive(Clone, Debug)]
 pub struct ReactionNetwork {
@@ -46,7 +53,7 @@ impl<'source> FromPyObject<'source> for ReactionNetwork {
 
 pub fn calc_propensities(
     propensities: &mut [f64],
-    components: &[u32],
+    components: &[Count],
     reactions: &ReactionNetwork,
 ) {
     for i in 0..reactions.len() {
@@ -95,15 +102,15 @@ pub fn select_reaction(propensities: &[f64]) -> usize {
 }
 
 #[derive(Debug, Clone)]
-struct Trajectory<'data> {
+pub struct Trajectory<T, C, R> {
     length: usize,
     num_components: usize,
-    timestamps: &'data [f64],
-    components: &'data [u32],
-    reaction_events: Option<&'data [u32]>,
+    timestamps: T,
+    components: C,
+    reaction_events: Option<R>,
 }
 
-impl<'data> Trajectory<'data> {
+impl<T, C, R> Trajectory<T, C, R> {
     fn len(&self) -> usize {
         self.length
     }
@@ -112,8 +119,151 @@ impl<'data> Trajectory<'data> {
         self.num_components
     }
 
-    fn get_component(&self, comp: usize, index: usize) -> u32 {
-        self.components[self.len() * comp + index]
+    fn get_component<U>(&self, comp: usize) -> &[U]
+    where
+        C: Borrow<[U]>,
+    {
+        &self.components.borrow()[self.len() * comp..self.len() * (comp + 1)]
+    }
+
+    fn get_component_mut<U>(&mut self, comp: usize) -> &mut [U]
+    where
+        C: BorrowMut<[U]>,
+    {
+        let length = self.len();
+        &mut self.components.borrow_mut()[length * comp..length * (comp + 1)]
+    }
+}
+
+pub struct TrajectoryArray<T, C, R> {
+    count: usize,
+    inner: Trajectory<T, C, R>,
+}
+
+impl<T, C, R> TrajectoryArray<T, C, R> {
+    fn num_steps(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn num_components(&self) -> usize {
+        self.inner.num_components()
+    }
+
+    fn len(&self) -> usize {
+        self.count
+    }
+}
+
+impl<T, C, R> TrajectoryArray<Vec<T>, Vec<C>, Vec<R>> {
+    fn get<'a>(&'a self, index: usize) -> Trajectory<&'a [T], &'a [C], &'a [R]> {
+        if index >= self.len() {
+            panic!("Index out of bounds")
+        }
+        let stride_t = self.num_steps();
+        let stride_c = self.num_steps() * self.num_components();
+        let stride_re = stride_t - 1;
+        let timestamps = &self.inner.timestamps[stride_t * index..stride_t * (index + 1)];
+        let components = &self.inner.components[stride_c * index..stride_c * (index + 1)];
+        let reaction_events = if let Some(re) = &self.inner.reaction_events {
+            Some(&re[stride_re * index..stride_re * (index + 1)])
+        } else {
+            None
+        };
+
+        Trajectory {
+            length: self.inner.len(),
+            num_components: self.inner.num_components(),
+            timestamps,
+            components,
+            reaction_events,
+        }
+    }
+
+    fn get_mut<'a>(
+        &'a mut self,
+        index: usize,
+    ) -> Trajectory<&'a mut [T], &'a mut [C], &'a mut [R]> {
+        if index >= self.len() {
+            panic!("Index out of bounds")
+        }
+        let stride_t = self.num_steps();
+        let stride_c = self.num_steps() * self.num_components();
+        let stride_re = stride_t - 1;
+        let num_components = self.num_components();
+        let timestamps = &mut self.inner.timestamps[stride_t * index..stride_t * (index + 1)];
+        let components = &mut self.inner.components[stride_c * index..stride_c * (index + 1)];
+        let reaction_events = if let Some(re) = &mut self.inner.reaction_events {
+            Some(&mut re[stride_re * index..stride_re * (index + 1)])
+        } else {
+            None
+        };
+
+        Trajectory {
+            length: stride_t,
+            num_components,
+            timestamps,
+            components,
+            reaction_events,
+        }
+    }
+}
+
+fn assert_dim(buffer: &PyBuffer, dimensions: usize, name: &str) -> PyResult<()> {
+    if buffer.dimensions() != dimensions {
+        Err(TypeError::py_err(format!(
+            "Array {:?} needs to have {:?} dimensions.",
+            name, dimensions
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+impl<'source, T, C, R> FromPyObject<'source> for TrajectoryArray<Vec<T>, Vec<C>, Vec<R>>
+where
+    T: Element + Copy,
+    C: Element + Copy,
+    R: Element + Copy,
+{
+    fn extract(obj: &'source PyAny) -> PyResult<Self> {
+        let py = obj.py();
+        let timestamps = obj.getattr("timestamps")?;
+        let timestamps = PyBuffer::get(py, timestamps)?;
+        assert_dim(&timestamps, 2, "timestamps")?;
+        let count = timestamps.shape()[0];
+        let length = timestamps.shape()[1];
+        let timestamps = timestamps.to_vec(py)?;
+
+        let components = obj.getattr("components")?;
+        let components = PyBuffer::get(py, components)?;
+        assert_dim(&components, 3, "components")?;
+        if count != components.shape()[0] || length != components.shape()[2] {
+            return TypeError::into("shapes of timestamps and components don't match");
+        }
+        let num_components = components.shape()[1];
+        let components = components.to_vec(py)?;
+
+        let reaction_events = obj.getattr("reaction_events")?;
+        let reaction_events = if reaction_events.is_none() {
+            None
+        } else {
+            let reaction_events = PyBuffer::get(py, reaction_events)?;
+            if count != reaction_events.shape()[0] || length - 1 != reaction_events.shape()[1] {
+                return TypeError::into("shapes of timestamps and reaction events don't match");
+            }
+            assert_dim(&reaction_events, 2, "reaction_events")?;
+            Some(reaction_events.to_vec(py)?)
+        };
+
+        let inner = Trajectory {
+            length,
+            num_components,
+            timestamps,
+            components,
+            reaction_events,
+        };
+
+        Ok(TrajectoryArray { count, inner })
     }
 }
 
@@ -122,16 +272,16 @@ struct Simulation<'ext, 'other> {
     current_time: f64,
     ext_progress: usize,
     propensities: &'other mut [f64],
-    components: &'other mut [u32],
-    ext_trajectory: Option<Trajectory<'ext>>,
+    components: &'other mut [Count],
+    ext_trajectory: Option<Trajectory<&'ext [f64], &'ext [Count], &'ext [u32]>>,
     reactions: &'other ReactionNetwork,
 }
 
 impl<'ext, 'other> Simulation<'ext, 'other> {
     pub fn new(
-        components: &'other mut [u32],
+        components: &'other mut [Count],
         propensities: &'other mut [f64],
-        ext_trajectory: Option<Trajectory<'ext>>,
+        ext_trajectory: Option<Trajectory<&'ext [f64], &'ext [Count], &'ext [u32]>>,
         reactions: &'other ReactionNetwork,
     ) -> Self {
         Self {
@@ -167,24 +317,24 @@ impl<'ext, 'other> Simulation<'ext, 'other> {
         }
     }
 
-    pub fn next_ext_component(&self, comp_num: usize) -> u32 {
+    pub fn next_ext_component(&self, comp_num: usize) -> Count {
         let traj = self
             .ext_trajectory
             .as_ref()
             .expect("no external trajectory");
         let index = std::cmp::min(self.ext_progress, traj.len() - 1);
-        traj.get_component(comp_num, index)
+        traj.get_component(comp_num)[index]
     }
 
     pub fn update_components(&mut self, selected_reaction: usize) {
         for &reactant in &self.reactions.reactants[selected_reaction] {
             if let Some(reactant) = reactant {
-                self.components[reactant as usize] -= 1
+                self.components[reactant as usize] -= 1 as Count
             }
         }
         for &product in &self.reactions.products[selected_reaction] {
             if let Some(product) = product {
-                self.components[product as usize] += 1
+                self.components[product as usize] += 1 as Count
             }
         }
     }
@@ -222,119 +372,111 @@ impl<'ext, 'other> Simulation<'ext, 'other> {
 
 fn _simulate_trajectories() {}
 
-fn assert_dim(buffer: &PyBuffer, dimensions: usize, name: &str) -> PyResult<()> {
-    if buffer.dimensions() != dimensions {
-        Err(TypeError::py_err(format!("Array {:?} needs to have {:?} dimensions.", name, dimensions)))
-    } else {
-        Ok(())
-    }
-}
-
 #[pymodule]
 fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
     #[pyfn(m, "simulate_trajectories")]
     fn simulate_trajectories(
         py: Python,
-        timestamps: PyObject,
-        trajectory: PyObject,
-        reaction_events: PyObject,
+        out: &PyAny,
         reactions: ReactionNetwork,
-        ext_timestamps: Option<PyObject>,
-        ext_trajectory: Option<PyObject>,
+        ext: Option<&PyAny>,
     ) -> PyResult<()> {
-        let timestamps = PyBuffer::get(py, timestamps.cast_as(py)?)?;
-        let trajectory = PyBuffer::get(py, trajectory.cast_as(py)?)?;
-        let reaction_events = PyBuffer::get(py, reaction_events.cast_as(py)?)?;
-
-        let ext_t;
-        let ext_c;
-        if let (Some(et), Some(ec)) = (ext_timestamps, ext_trajectory) {
-            ext_t = Some(PyBuffer::get(py, et.cast_as(py)?)?);
-            ext_c = Some(PyBuffer::get(py, ec.cast_as(py)?)?);
-            assert_dim(ext_t.as_ref().unwrap(), 2, "ext_timestamps")?;
-            assert_dim(ext_c.as_ref().unwrap(), 3, "ext_trajectory")?;
-        } else {
-            ext_t = None;
-            ext_c = None;
+        unsafe { pyo3::ffi::Py_INCREF(out.as_ptr()) };
+        let mut traj: TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>> = out.extract()?;
+        if traj.inner.reaction_events.is_none() {
+            return Err(TypeError::py_err(
+                "trajectory does not contain reaction events!",
+            ));
         }
-
-        assert_dim(&timestamps, 2, "timestamps")?;
-        assert_dim(&trajectory, 3, "trajectory")?;
-        assert_dim(&reaction_events, 2, "reaction_events")?;
-
-        let count = timestamps.shape()[0];
-        let length = timestamps.shape()[1];
-        let num_components = trajectory.shape()[1];
-
-        let mut t = timestamps.to_vec::<f64>(py)?;
-        let mut c = trajectory.to_vec::<u32>(py)?;
-        let mut re = reaction_events.to_vec::<u32>(py)?;
-
-        let ext_count = ext_t.as_ref().map(|x| x.shape()[0]).unwrap_or(0);
-        let ext_length = ext_t.as_ref().map(|x| x.shape()[1]).unwrap_or(0);
-        let num_ext_components = ext_c.as_ref().map(|x| x.shape()[1]).unwrap_or(0);
-
-        if ext_count != count && ext_count > 1 {
-            return Err(TypeError::py_err("Could not broadcast shapes!"));
-        }
-
-        let et = ext_t.map(|x| x.to_vec::<f64>(py)).transpose()?;
-        let ec = ext_c.map(|x| x.to_vec::<u32>(py)).transpose()?;
+        let ext: Option<TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>>> =
+            ext.map(|x| x.extract()).transpose()?;
+        let ext = ext.as_ref();
 
         // hot loop
         py.allow_threads(|| {
-            let mut components = vec![0; num_components + num_ext_components];
-            let mut propensities = vec![0.0; reactions.len()];
-            for r in 0..count {
-                let stride = timestamps.shape()[1];
-                let t = &mut t[stride * r..stride * (r + 1)];
-                let stride = trajectory.shape()[1] * trajectory.shape()[2];
-                let c = &mut c[stride * r..stride * (r + 1)];
-                let stride = reaction_events.shape()[1];
-                let re = &mut re[stride * r..stride * (r + 1)];
+            let num_components = traj.num_components();
+            let num_ext_components = ext.map(|x| x.num_components()).unwrap_or(0);
+
+            let mut components = vec![0.0; num_components + num_ext_components];
+            let mut propensities = vec![0 as Count; reactions.len()];
+            for r in 0..traj.len() {
+                let mut trajectory = traj.get_mut(r);
 
                 let ext_traj;
-                if let (Some(et), Some(ec)) = (&et, &ec) {
-                    let ext_index = r % ext_count; //< broadcasting
-                    ext_traj = Some(Trajectory {
-                        num_components: 1,
-                        length: ext_length,
-                        timestamps: &et[ext_length * ext_index..ext_length * (ext_index + 1)],
-                        components: &ec[ext_length * ext_index..ext_length * (ext_index + 1)],
-                        reaction_events: None,
-                    })
+                if let Some(ext) = ext {
+                    let ext_index = r % ext.len(); //< broadcasting
+                    ext_traj = Some(ext.get(ext_index));
                 } else {
                     ext_traj = None
                 }
 
                 // set the initial component values
                 for i in 0..num_ext_components {
-                    components[i] = ec.as_ref().unwrap()[i * ext_length + 0]
+                    components[i] = ext_traj.as_ref().unwrap().get_component(i)[0];
                 }
                 for i in 0..num_components {
-                    components[i + num_ext_components] = c[i * length + 0]
+                    components[i + num_ext_components] = trajectory.get_component(i)[0];
                 }
 
                 let mut sim =
                     Simulation::new(&mut components, &mut propensities, ext_traj, &reactions);
 
                 let mut progress = 0;
-                while (progress + 1) < length {
+                while (progress + 1) < trajectory.len() {
                     progress += 1;
                     let (time, selected_reaction) = sim.propagate_time();
-                    t[progress] = time;
-                    re[progress - 1] = selected_reaction as u32;
+                    trajectory.timestamps[progress] = time;
+                    trajectory.reaction_events.as_mut().unwrap()[progress - 1] =
+                        selected_reaction as u32;
                     for i in 0..num_components {
-                        let index = i * length + progress;
-                        c[index] = sim.components[num_ext_components + i];
+                        trajectory.get_component_mut(i)[progress] =
+                            sim.components[num_ext_components + i];
                     }
                 }
             }
         });
 
-        timestamps.copy_from_slice(py, &t)?;
-        trajectory.copy_from_slice(py, &c)?;
-        reaction_events.copy_from_slice(py, &re)?;
+        println!("{:?}", out.get_refcnt());
+        let timestamps = PyBuffer::get(py, out.getattr("timestamps")?)?;
+        timestamps.copy_from_slice(py, &traj.inner.timestamps)?;
+        let trajectory = PyBuffer::get(py, out.getattr("components")?)?;
+        trajectory.copy_from_slice(py, &traj.inner.components)?;
+        let reaction_events = PyBuffer::get(py, out.getattr("reaction_events")?)?;
+        reaction_events.copy_from_slice(py, &traj.inner.reaction_events.unwrap())?;
+
+        Ok(())
+    }
+
+    #[pyfn(m, "log_likelihood")]
+    fn log_likelihood(
+        py: Python,
+        response: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
+        signal: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
+        reactions: ReactionNetwork,
+        out: &PyAny,
+    ) -> PyResult<()> {
+        let num_responses = response.len();
+        let num_signals = signal.len();
+
+        if num_responses != num_signals && !(num_responses == 1 || num_signals == 1) {
+            return TypeError::into("could not broadcast trajectories");
+        }
+
+        let out = PyBuffer::get(py, out)?;
+        assert_dim(&out, 2, "out")?;
+        if out.shape()[0] != num_responses.max(num_signals)
+            || out.shape()[1] != response.num_steps() - 1
+        {
+            return TypeError::into("output array has wrong shape");
+        }
+
+        let mut out_vec = out.to_vec(py)?;
+
+        py.allow_threads(|| {
+            likelihood::log_likelihood(signal, response, &reactions, &mut out_vec);
+        });
+
+        out.copy_from_slice(py, &out_vec)?;
 
         Ok(())
     }
