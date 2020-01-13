@@ -249,13 +249,13 @@ pub fn log_likelihood(
 
         let bin_iter = traj_lengths.iter().zip(out.iter_mut());
         let mut result_iter = response.timestamps.iter().zip(tmp.iter()).peekable();
-        for (&bin_edge, out) in bin_iter {
+        'outer: for (&bin_edge, out) in bin_iter {
             while let Some(&(&t, &lh)) = result_iter.peek() {
                 if t < bin_edge {
                     *out += lh;
                     result_iter.next();
                 } else {
-                    break;
+                    continue 'outer
                 }
             }
             *out = std::f64::NAN;
