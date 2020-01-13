@@ -241,7 +241,7 @@ pub fn log_likelihood(
     let out_size = num_responses.max(num_signals);
     assert_eq!(out.len(), out_size * traj_lengths.len());
 
-    let mut tmp = vec![0.0; response.num_steps()];
+    let mut tmp = vec![0.0; response.num_steps() - 1];
     for (idx, out) in (0..out_size).zip(out.chunks_mut(traj_lengths.len())) {
         let r_idx = idx % num_responses;
         let s_idx = idx % num_signals;
@@ -249,13 +249,15 @@ pub fn log_likelihood(
         log_likelihood_inner(signal.get(s_idx), response, reactions, &mut tmp);
 
         let bin_iter = traj_lengths.iter().zip(out.iter_mut());
-        let mut result_iter = response.timestamps.iter().zip(tmp.iter()).peekable();
+        let mut result_iter = response.timestamps[1..].iter().zip(tmp.iter()).peekable();
+        let mut acc = 0.0;
         'outer: for (&bin_edge, out) in bin_iter {
             while let Some(&(&t, &lh)) = result_iter.peek() {
                 if t < bin_edge {
-                    *out += lh;
+                    acc = lh;
                     result_iter.next();
                 } else {
+                    *out = acc;
                     continue 'outer
                 }
             }
