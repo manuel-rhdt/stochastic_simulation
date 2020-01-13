@@ -239,9 +239,10 @@ pub fn log_likelihood(
     assert!(num_responses == num_signals || (num_responses == 1 || num_signals == 1));
 
     let out_size = num_responses.max(num_signals);
+    assert_eq!(out.len(), out_size * traj_lengths.len());
 
     let mut tmp = vec![0.0; response.num_steps()];
-    for (idx, out) in (0..out_size).zip(out.chunks_mut(response.num_steps())) {
+    for (idx, out) in (0..out_size).zip(out.chunks_mut(traj_lengths.len())) {
         let r_idx = idx % num_responses;
         let s_idx = idx % num_signals;
         let response = response.get(r_idx);
