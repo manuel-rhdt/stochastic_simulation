@@ -570,22 +570,23 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
                 );
             });
         } else {
-            assert_dim(&out, 3, "out")?;
-            if shape[0] != num_responses || shape[1] != num_signals || shape[2] != len_traj_lengths
+            assert_dim(&out, 2, "out")?;
+            if shape[0] != num_responses || shape[1] != len_traj_lengths
             {
                 return TypeError::into(format!("output array has wrong shape {:?}", shape));
             }
             py.allow_threads(|| {
-                let stride = shape[1] * shape[2];
-                for (r, out_slice) in (0..response.len()).zip(out_vec.chunks_mut(stride)) {
+                let mut tmp = vec![0.0; num_signals * shape[1]];
+                for (r, out_slice) in (0..response.len()).zip(out_vec.chunks_mut(shape[1])) {
                     let response = TrajectoryArray::from_trajectory(response.get(r));
                     likelihood::log_likelihood(
                         &traj_lengths_vec,
                         signal.as_ref(),
                         response,
                         &reactions,
-                        out_slice,
+                        &mut tmp,
                     );
+                    likelihood::logsumexp_2d(tmp, shape[1], out_slice);
                 }
             });
         }

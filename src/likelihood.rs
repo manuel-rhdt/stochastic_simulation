@@ -258,10 +258,22 @@ pub fn log_likelihood(
                     result_iter.next();
                 } else {
                     *out = acc;
-                    continue 'outer
+                    continue 'outer;
                 }
             }
             *out = std::f64::NAN;
         }
+    }
+}
+
+pub fn logsumexp(values: impl Clone + IntoIterator<Item = f64>) -> f64 {
+    let max = values.clone().into_iter().fold(0.0_f64, |a, b| a.max(b));
+    values.into_iter().map(|x| (x - max).exp()).sum::<f64>().ln() + max
+}
+
+pub fn logsumexp_2d(values: &[f64], stride: usize, out: &mut [f64]) {
+    for (i, out) in out.iter_mut().enumerate() {
+        let iter = values.chunks(stride).map(|chunk| chunk[i]);
+        *out = logsumexp(iter);
     }
 }
