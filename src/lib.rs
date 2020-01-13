@@ -586,7 +586,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
                         &reactions,
                         &mut tmp,
                     );
-                    likelihood::logsumexp_2d(tmp, shape[1], out_slice);
+                    likelihood::logsumexp_2d(&tmp, shape[1], out_slice);
                 }
             });
         }
