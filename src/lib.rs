@@ -127,15 +127,22 @@ impl<T, C, R> Trajectory<T, C, R> {
     where
         C: Borrow<[U]>,
     {
-        &self.components.borrow()[self.len() * comp..self.len() * (comp + 1)]
+        self.components
+            .borrow()
+            .chunks(self.length)
+            .nth(comp)
+            .expect("Access out of bounds.")
     }
 
     fn get_component_mut<U>(&mut self, comp: usize) -> &mut [U]
     where
         C: BorrowMut<[U]>,
     {
-        let length = self.len();
-        &mut self.components.borrow_mut()[length * comp..length * (comp + 1)]
+        self.components
+            .borrow_mut()
+            .chunks_mut(self.length)
+            .nth(comp)
+            .expect("Access out of bounds.")
     }
 
     fn as_ref<X: ?Sized, Y: ?Sized, Z: ?Sized>(&self) -> Trajectory<&X, &Y, &Z>
@@ -201,20 +208,31 @@ impl<T, C, R> TrajectoryArray<T, C, R> {
         if index >= self.len() {
             panic!("Index out of bounds")
         }
-        let stride_t = self.num_steps();
-        let stride_c = self.num_steps() * self.num_components();
-        let stride_re = stride_t - 1;
-        let timestamps = &self.inner.timestamps.borrow()[stride_t * index..stride_t * (index + 1)];
-        let components = &self.inner.components.borrow()[stride_c * index..stride_c * (index + 1)];
+        let num_steps = self.num_steps();
+        let num_components = self.num_components();
+        let timestamps = self
+            .inner
+            .timestamps
+            .borrow()
+            .chunks(num_steps)
+            .nth(index)
+            .unwrap();
+        let components = self
+            .inner
+            .components
+            .borrow()
+            .chunks(num_steps * num_components)
+            .nth(index)
+            .unwrap();
         let reaction_events = if let Some(re) = &self.inner.reaction_events {
-            Some(&re.borrow()[stride_re * index..stride_re * (index + 1)])
+            Some(re.borrow().chunks(num_steps - 1).nth(index).unwrap())
         } else {
             None
         };
 
         Trajectory {
-            length: self.inner.len(),
-            num_components: self.inner.num_components(),
+            length: num_steps,
+            num_components,
             timestamps,
             components,
             reaction_events,
@@ -233,22 +251,35 @@ impl<T, C, R> TrajectoryArray<T, C, R> {
         if index >= self.len() {
             panic!("Index out of bounds")
         }
-        let stride_t = self.num_steps();
-        let stride_c = self.num_steps() * self.num_components();
-        let stride_re = stride_t - 1;
+        let num_steps = self.num_steps();
         let num_components = self.num_components();
-        let timestamps =
-            &mut self.inner.timestamps.borrow_mut()[stride_t * index..stride_t * (index + 1)];
-        let components =
-            &mut self.inner.components.borrow_mut()[stride_c * index..stride_c * (index + 1)];
+        let timestamps = self
+            .inner
+            .timestamps
+            .borrow_mut()
+            .chunks_mut(num_steps)
+            .nth(index)
+            .unwrap();
+        let components = self
+            .inner
+            .components
+            .borrow_mut()
+            .chunks_mut(num_steps * num_components)
+            .nth(index)
+            .unwrap();
         let reaction_events = if let Some(re) = &mut self.inner.reaction_events {
-            Some(&mut re.borrow_mut()[stride_re * index..stride_re * (index + 1)])
+            Some(
+                re.borrow_mut()
+                    .chunks_mut(num_steps - 1)
+                    .nth(index)
+                    .unwrap(),
+            )
         } else {
             None
         };
 
         Trajectory {
-            length: stride_t,
+            length: num_steps,
             num_components,
             timestamps,
             components,
@@ -546,8 +577,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
             py.allow_threads(|| {
                 let stride = shape[1] * shape[2];
-                for r in 0..response.len() {
-                    let out_slice = &mut out_vec[r * stride..(r + 1) * stride];
+                for (r, out_slice) in (0..response.len()).zip(out_vec.chunks_mut(stride)) {
                     let response = TrajectoryArray::from_trajectory(response.get(r));
                     likelihood::log_likelihood(
                         &traj_lengths_vec,
