@@ -14,3 +14,9 @@ rand = "0.7.3"
 [dependencies.pyo3]
 version = "0.8.5"
 features = ["extension-module"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3

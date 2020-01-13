@@ -21,6 +21,10 @@ pub struct ReactionNetwork {
 }
 
 impl ReactionNetwork {
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn len(&self) -> usize {
         self.k.len()
     }
@@ -101,7 +105,7 @@ pub fn select_reaction(propensities: &[f64]) -> usize {
     selected_reaction
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Trajectory<T, C, R> {
     length: usize,
     num_components: usize,
@@ -150,6 +154,7 @@ impl<T, C, R> Trajectory<T, C, R> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct TrajectoryArray<T, C, R> {
     count: usize,
     inner: Trajectory<T, C, R>,
@@ -352,12 +357,10 @@ impl<'ext, 'other> Simulation<'ext, 'other> {
     pub fn next_ext_timestamp(&self) -> f64 {
         if self.ext_progress >= self.ext_len() {
             std::f64::INFINITY
+        } else if let Some(traj) = &self.ext_trajectory {
+            traj.timestamps[self.ext_progress]
         } else {
-            if let Some(traj) = &self.ext_trajectory {
-                traj.timestamps[self.ext_progress]
-            } else {
-                panic!("no external trajectory")
-            }
+            panic!("no external trajectory")
         }
     }
 
@@ -493,6 +496,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
     #[pyfn(m, "log_likelihood")]
     fn log_likelihood(
         py: Python,
+        traj_lengths_obj: PyObject,
         response: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         signal: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         reactions: ReactionNetwork,
@@ -512,20 +516,22 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
         }
 
+        let traj_lengths = PyBuffer::get(py, traj_lengths_obj.cast_as(py)?)?;
+        assert_dim(&traj_lengths, 1, "traj_lengths")?;
+        let len_traj_lengths = traj_lengths.shape()[0];
+        let traj_lengths_vec = traj_lengths.to_vec(py)?;
+
         let out = PyBuffer::get(py, out_obj.cast_as(py)?)?;
-        let mut out_vec;
+        let shape = out.shape().to_owned();
+        let mut out_vec = out.to_vec(py)?;
         if !outer {
             assert_dim(&out, 2, "out")?;
-            if out.shape()[0] != num_responses.max(num_signals)
-                || out.shape()[1] != response.num_steps() - 1
-            {
-                return TypeError::into("output array has wrong shape");
+            if shape[0] != num_responses.max(num_signals) || shape[1] != len_traj_lengths {
+                return TypeError::into(format!("output array has wrong shape {:?}", shape));
             }
-
-            out_vec = out.to_vec(py)?;
-
             py.allow_threads(|| {
                 likelihood::log_likelihood(
+                    &traj_lengths_vec,
                     signal.as_ref(),
                     response.as_ref(),
                     &reactions,
@@ -534,20 +540,22 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             });
         } else {
             assert_dim(&out, 3, "out")?;
-            let shape = out.shape().to_owned();
-            if shape[0] != num_responses
-                || shape[1] != num_signals
-                || shape[2] != response.num_steps() - 1
+            if shape[0] != num_responses || shape[1] != num_signals || shape[2] != len_traj_lengths
             {
                 return TypeError::into(format!("output array has wrong shape {:?}", shape));
             }
-            out_vec = out.to_vec(py)?;
             py.allow_threads(|| {
                 let stride = shape[1] * shape[2];
                 for r in 0..response.len() {
                     let out_slice = &mut out_vec[r * stride..(r + 1) * stride];
                     let response = TrajectoryArray::from_trajectory(response.get(r));
-                    likelihood::log_likelihood(signal.as_ref(), response, &reactions, out_slice);
+                    likelihood::log_likelihood(
+                        &traj_lengths_vec,
+                        signal.as_ref(),
+                        response,
+                        &reactions,
+                        out_slice,
+                    );
                 }
             });
         }

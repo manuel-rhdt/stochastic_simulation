@@ -227,6 +227,7 @@ fn log_likelihood_inner<'a>(
 type TrajectoryArrayStd<'a> = TrajectoryArray<&'a [f64], &'a [f64], &'a [u32]>;
 
 pub fn log_likelihood(
+    traj_lengths: &[f64],
     signal: TrajectoryArrayStd<'_>,
     response: TrajectoryArrayStd<'_>,
     reactions: &ReactionNetwork,
@@ -239,9 +240,25 @@ pub fn log_likelihood(
 
     let out_size = num_responses.max(num_signals);
 
+    let mut tmp = vec![0.0; response.num_steps()];
     for (idx, out) in (0..out_size).zip(out.chunks_mut(response.num_steps())) {
         let r_idx = idx % num_responses;
         let s_idx = idx % num_signals;
-        log_likelihood_inner(signal.get(s_idx), response.get(r_idx), reactions, out);
+        let response = response.get(r_idx);
+        log_likelihood_inner(signal.get(s_idx), response, reactions, &mut tmp);
+
+        let bin_iter = traj_lengths.iter().zip(out.iter_mut());
+        let mut result_iter = response.timestamps.iter().zip(tmp.iter()).peekable();
+        for (&bin_edge, out) in bin_iter {
+            while let Some(&(&t, &lh)) = result_iter.peek() {
+                if t < bin_edge {
+                    *out += lh;
+                    result_iter.next();
+                } else {
+                    break;
+                }
+            }
+            *out = std::f64::NAN;
+        }
     }
 }
