@@ -4,19 +4,16 @@ version = "0.1.0"
 authors = ["Manuel Reinhardt <M.Reinhardt@amolf.nl>"]
 edition = "2018"
 
-[lib]
-name = "accelerate"
-crate-type = ["cdylib"]
-
 [dependencies]
 rand = "0.7.3"
-
-[dependencies.pyo3]
-version = "0.8.5"
-features = ["extension-module"]
+toml = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+ndarray = "0.13"
+ndarray-npy = "0.5.0"
+rayon = "1.3"
 
 [profile.dev]
-opt-level = 1
+opt-level = 0
 
 [profile.release]
 opt-level = 3
