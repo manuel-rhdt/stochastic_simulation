@@ -455,18 +455,18 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
     #[pyfn(m, "simulate_trajectories")]
     fn simulate_trajectories(
         py: Python,
-        out_obj: PyObject,
+        out_obj: &PyAny,
         reactions: ReactionNetwork,
-        ext: Option<PyObject>,
+        ext: Option<&PyAny>,
     ) -> PyResult<()> {
-        let mut traj: TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>> = out_obj.extract(py)?;
+        let mut traj: TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>> = out_obj.extract()?;
         if traj.inner.reaction_events.is_none() {
             return Err(TypeError::py_err(
                 "trajectory does not contain reaction events!",
             ));
         }
         let ext: Option<TrajectoryArray<Vec<f64>, Vec<Count>, Vec<u32>>> =
-            ext.map(|x| x.extract(py)).transpose()?;
+            ext.map(|x| x.extract()).transpose()?;
         let ext = ext.as_ref();
 
         // hot loop
@@ -513,12 +513,11 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
         });
 
-        let out: &PyAny = out_obj.cast_as(py)?;
-        let timestamps = PyBuffer::get(py, out.getattr("timestamps")?)?;
+        let timestamps = PyBuffer::get(py, out_obj.getattr("timestamps")?)?;
         timestamps.copy_from_slice(py, &traj.inner.timestamps)?;
-        let trajectory = PyBuffer::get(py, out.getattr("components")?)?;
+        let trajectory = PyBuffer::get(py, out_obj.getattr("components")?)?;
         trajectory.copy_from_slice(py, &traj.inner.components)?;
-        let reaction_events = PyBuffer::get(py, out.getattr("reaction_events")?)?;
+        let reaction_events = PyBuffer::get(py, out_obj.getattr("reaction_events")?)?;
         reaction_events.copy_from_slice(py, &traj.inner.reaction_events.unwrap())?;
 
         Ok(())
@@ -527,11 +526,11 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
     #[pyfn(m, "log_likelihood")]
     fn log_likelihood(
         py: Python,
-        traj_lengths_obj: PyObject,
+        traj_lengths_obj: &PyAny,
         response: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         signal: TrajectoryArray<Vec<f64>, Vec<f64>, Vec<u32>>,
         reactions: ReactionNetwork,
-        out_obj: PyObject,
+        out_obj: &PyAny,
         outer: Option<bool>,
     ) -> PyResult<()> {
         let num_responses = response.len();
@@ -547,16 +546,17 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             }
         }
 
-        let traj_lengths = PyBuffer::get(py, traj_lengths_obj.cast_as(py)?)?;
+        let traj_lengths = PyBuffer::get(py, traj_lengths_obj)?;
         assert_dim(&traj_lengths, 1, "traj_lengths")?;
         let len_traj_lengths = traj_lengths.shape()[0];
         let traj_lengths_vec = traj_lengths.to_vec(py)?;
 
-        let out = PyBuffer::get(py, out_obj.cast_as(py)?)?;
+        let out = PyBuffer::get(py, out_obj)?;
+        assert_dim(&out, 2, "out")?;
         let shape = out.shape().to_owned();
         let mut out_vec = out.to_vec(py)?;
+        out.release(py);
         if !outer {
-            assert_dim(&out, 2, "out")?;
             if shape[0] != num_responses.max(num_signals) || shape[1] != len_traj_lengths {
                 return TypeError::into(format!("output array has wrong shape {:?}", shape));
             }
@@ -570,9 +570,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
                 );
             });
         } else {
-            assert_dim(&out, 2, "out")?;
-            if shape[0] != num_responses || shape[1] != len_traj_lengths
-            {
+            if shape[0] != num_responses || shape[1] != len_traj_lengths {
                 return TypeError::into(format!("output array has wrong shape {:?}", shape));
             }
             py.allow_threads(|| {
@@ -591,7 +589,7 @@ fn accelerate(_py: Python, m: &PyModule) -> PyResult<()> {
             });
         }
 
-        let out = PyBuffer::get(py, out_obj.cast_as(py)?)?;
+        let out = PyBuffer::get(py, out_obj)?;
         out.copy_from_slice(py, &out_vec)?;
 
         Ok(())
