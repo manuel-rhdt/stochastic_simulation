@@ -20,13 +20,13 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use toml;
 
-fn calculate_hash<T: Hash>(t: &T) -> u64 {
+fn calculate_hash<T: Hash + ?Sized>(t: &T) -> u64 {
     let mut s = DefaultHasher::new();
     t.hash(&mut s);
     s.finish()
 }
 
-fn stringhash<T: Hash>(t: &T) -> String {
+fn stringhash<T: Hash + ?Sized>(t: &T) -> String {
     let val = calculate_hash(t);
     let array: [u8; 8] = unsafe { std::mem::transmute(val) };
     base64::encode_config(&array, base64::URL_SAFE_NO_PAD)
@@ -230,15 +230,8 @@ fn main() -> std::io::Result<()> {
     create_dir_if_not_exists(&conf.output)?;
     let info_toml_path = &conf.output.join("info.toml");
 
-    let worker_id = std::env::var("GILLESPIE_WORKER_ID")
-        .ok()
-        .map(|val| stringhash(&val));
-    let worker_name = worker_id
-        .as_ref()
-        .map(std::ops::Deref::deref)
-        .unwrap_or("0");
-    let worker_dir = &conf.output.join(&format!("worker_{}", worker_name));
-    create_dir_if_not_exists(worker_dir)?;
+    let worker_name = std::env::var("GILLESPIE_WORKER_ID").ok();
+    let worker_id = worker_name.as_deref().map(|val| stringhash(val));
 
     match fs::OpenOptions::new()
         .create_new(true)
@@ -268,7 +261,12 @@ fn main() -> std::io::Result<()> {
         Err(other) => return Err(other),
     }
 
-    let seed_base = calculate_hash(&conf) ^ calculate_hash(&worker_id);
+    let worker_dir = &conf
+        .output
+        .join(&format!("{}", worker_name.as_deref().unwrap_or("default")));
+    fs::create_dir(worker_dir)?;
+
+    let seed_base = calculate_hash(&conf) ^ calculate_hash(&worker_name);
 
     let sig_network = conf.signal.to_reaction_network();
     let res_network = conf.response.to_reaction_network();
