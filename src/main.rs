@@ -53,7 +53,7 @@ fn marginal_likelihood(
     res_network: &ReactionNetwork,
 ) -> Array1<f64> {
     let sig = simulate(1, length, &[50.0; 1], sig_network, None);
-    let res = simulate(1, length, &[50.0; 2], sig_network, Some(sig.as_ref()));
+    let res = simulate(1, length, &[50.0; 2], res_network, Some(sig.as_ref()));
 
     let mut result = Array2::zeros((signals_pre.len(), traj_lengths.len()));
     log_likelihood(
