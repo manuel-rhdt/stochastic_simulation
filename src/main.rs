@@ -13,15 +13,21 @@ use likelihood::log_likelihood;
 use base64;
 use ndarray::{Array, Array1, Array2, Array3, ArrayView1, Axis};
 use ndarray_npy::WriteNpyExt;
+use rand::{self, SeedableRng};
+use rand_chacha::ChaChaRng;
 use rayon;
 use rayon::prelude::*;
 use serde::Deserialize;
 use toml;
 
-fn calculate_hash<T: Hash>(t: &T) -> String {
+fn calculate_hash<T: Hash>(t: &T) -> u64 {
     let mut s = DefaultHasher::new();
     t.hash(&mut s);
-    let val = s.finish();
+    s.finish()
+}
+
+fn stringhash<T: Hash>(t: &T) -> String {
+    let val = calculate_hash(t);
     let array: [u8; 8] = unsafe { std::mem::transmute(val) };
     base64::encode_config(&array, base64::URL_SAFE_NO_PAD)
 }
@@ -33,8 +39,9 @@ fn conditional_likelihood(
     length: usize,
     sig_network: &ReactionNetwork,
     res_network: &ReactionNetwork,
+    rng: &mut impl rand::Rng,
 ) -> Array1<f64> {
-    let sig = simulate(1, length, &vec![50.0; 1], sig_network, None);
+    let sig = simulate(1, length, &vec![50.0; 1], sig_network, None, rng);
     let mut result = Array3::zeros((num_res / batch, batch, traj_lengths.len()));
     for mut out in result.outer_iter_mut() {
         let res = simulate(
@@ -43,6 +50,7 @@ fn conditional_likelihood(
             &vec![50.0; 2],
             res_network,
             Some(sig.as_ref()),
+            rng,
         );
         log_likelihood(
             traj_lengths,
@@ -62,9 +70,10 @@ fn marginal_likelihood(
     signals_pre: TrajectoryArray<&[f64], &[f64], &[u32]>,
     sig_network: &ReactionNetwork,
     res_network: &ReactionNetwork,
+    rng: &mut impl rand::Rng,
 ) -> Array1<f64> {
-    let sig = simulate(1, length, &[50.0; 1], sig_network, None);
-    let res = simulate(1, length, &[50.0; 2], res_network, Some(sig.as_ref()));
+    let sig = simulate(1, length, &[50.0; 1], sig_network, None, rng);
+    let res = simulate(1, length, &[50.0; 2], res_network, Some(sig.as_ref()), rng);
 
     let mut result = Array2::zeros((signals_pre.len(), traj_lengths.len()));
     log_likelihood(
@@ -93,7 +102,7 @@ pub fn logmeanexp(values: ArrayView1<f64>) -> f64 {
         + max
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Hash)]
 struct Config {
     output: PathBuf,
     batch_size: usize,
@@ -104,13 +113,13 @@ struct Config {
     response: ConfigReactionNetwork,
 }
 
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct ConfigConditionalEntropy {
     num_signals: usize,
     responses_per_signal: usize,
 }
 
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct ConfigMarginalEntropy {
     num_signals: usize,
     num_responses: usize,
@@ -121,6 +130,14 @@ struct ConfigReactionNetwork {
     initial: f64,
     components: Vec<String>,
     reactions: Vec<Reaction>,
+}
+
+impl Hash for ConfigReactionNetwork {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.initial.to_bits().hash(state);
+        self.components.hash(state);
+        self.reactions.hash(state);
+    }
 }
 
 impl ConfigReactionNetwork {
@@ -183,9 +200,25 @@ struct Reaction {
     products: Vec<String>,
 }
 
+impl Hash for Reaction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.k.to_bits().hash(state);
+        self.reactants.hash(state);
+        self.products.hash(state);
+    }
+}
+
 enum EntropyType {
     Conditional,
     Marginal,
+}
+
+fn create_dir_if_not_exists<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<()> {
+    match fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -194,16 +227,18 @@ fn main() -> std::io::Result<()> {
     config_file.read_to_string(&mut contents)?;
     let conf: Config = toml::from_str(&contents)?;
 
-    match fs::create_dir(&conf.output) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-        other => return other,
-    }
+    create_dir_if_not_exists(&conf.output)?;
     let info_toml_path = &conf.output.join("info.toml");
 
     let worker_id = std::env::var("GILLESPIE_WORKER_ID")
         .ok()
-        .map(|val| calculate_hash(&val));
+        .map(|val| stringhash(&val));
+    let worker_name = worker_id
+        .as_ref()
+        .map(std::ops::Deref::deref)
+        .unwrap_or("0");
+    let worker_dir = &conf.output.join(&format!("worker_{}", worker_name));
+    create_dir_if_not_exists(worker_dir)?;
 
     match fs::OpenOptions::new()
         .create_new(true)
@@ -233,6 +268,8 @@ fn main() -> std::io::Result<()> {
         Err(other) => return Err(other),
     }
 
+    let seed_base = calculate_hash(&conf) ^ calculate_hash(&worker_id);
+
     let sig_network = conf.signal.to_reaction_network();
     let res_network = conf.response.to_reaction_network();
 
@@ -240,8 +277,11 @@ fn main() -> std::io::Result<()> {
 
     let traj_lengths = Array::linspace(0.0, 600.0, length);
 
-    let ce_chunks = rayon::iter::repeatn((), conf.conditional_entropy.num_signals)
-        .map(|_| {
+    let ce_chunks = (0..conf.conditional_entropy.num_signals)
+        .into_par_iter()
+        .map(|num| {
+            let seed = num as u64 ^ seed_base ^ 0xabcdabcd;
+            let mut rng = ChaChaRng::seed_from_u64(seed);
             -conditional_likelihood(
                 traj_lengths.as_slice().unwrap(),
                 conf.conditional_entropy.responses_per_signal,
@@ -249,27 +289,34 @@ fn main() -> std::io::Result<()> {
                 length,
                 &sig_network,
                 &res_network,
+                &mut rng,
             )
         })
         .chunks(conf.batch_size)
         .enumerate();
 
+    let mut rng = ChaChaRng::seed_from_u64(seed_base);
     let signals_pre = simulate(
         conf.marginal_entropy.num_signals,
         length,
         &[50.0],
         &sig_network,
         None,
+        &mut rng,
     );
 
-    let me_chunks = rayon::iter::repeatn((), conf.marginal_entropy.num_responses)
-        .map(|_| {
+    let me_chunks = (0..conf.marginal_entropy.num_responses)
+        .into_par_iter()
+        .map(|num| {
+            let seed = num as u64 ^ seed_base ^ 0x12341234;
+            let mut rng = ChaChaRng::seed_from_u64(seed);
             -marginal_likelihood(
                 traj_lengths.as_slice().unwrap(),
                 length,
                 signals_pre.as_ref(),
                 &sig_network,
                 &res_network,
+                &mut rng,
             )
         })
         .chunks(conf.batch_size)
@@ -284,13 +331,12 @@ fn main() -> std::io::Result<()> {
                 row.assign(ll);
             }
 
-            let worker_id = worker_id.as_ref().map(std::ops::Deref::deref).unwrap_or("");
             let filename = match entropy_type {
-                EntropyType::Conditional => format!("ce{}-{:?}.npy", worker_id, chunk_num),
-                EntropyType::Marginal => format!("me{}-{:?}.npy", worker_id, chunk_num),
+                EntropyType::Conditional => format!("ce-{:?}.npy", chunk_num),
+                EntropyType::Marginal => format!("me-{:?}.npy", chunk_num),
             };
 
-            if let Ok(out_file) = File::create(conf.output.join(&filename)) {
+            if let Ok(out_file) = File::create(worker_dir.join(&filename)) {
                 array.write_npy(out_file).expect("could not write npy");
             } else {
                 panic!("could not write chunk {:?}", &filename);

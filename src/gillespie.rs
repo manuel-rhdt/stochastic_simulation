@@ -60,21 +60,6 @@ pub fn try_propagate_time(
     }
 }
 
-pub fn select_reaction(propensities: &[f64]) -> usize {
-    let r: f64 = rand::random();
-    let total_propensity: f64 = propensities.iter().sum();
-
-    let mut selected_reaction = 0;
-    let mut acc = propensities[0] / total_propensity;
-
-    while r > acc && selected_reaction + 1 < propensities.len() {
-        selected_reaction += 1;
-        acc += propensities[selected_reaction] / total_propensity;
-    }
-
-    selected_reaction
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Trajectory<T, C, R> {
     pub length: usize,
@@ -259,7 +244,8 @@ impl<T, C, R> TrajectoryArray<T, C, R> {
 }
 
 #[derive(Debug)]
-struct Simulation<'ext, 'other> {
+struct Simulation<'ext, 'other, Rng: rand::Rng> {
+    rng: &'other mut Rng,
     current_time: f64,
     ext_progress: usize,
     propensities: &'other mut [f64],
@@ -268,12 +254,13 @@ struct Simulation<'ext, 'other> {
     reactions: &'other ReactionNetwork,
 }
 
-impl<'ext, 'other> Simulation<'ext, 'other> {
+impl<'ext, 'other, Rng: rand::Rng> Simulation<'ext, 'other, Rng> {
     pub fn new(
         components: &'other mut [Count],
         propensities: &'other mut [f64],
         ext_trajectory: Option<Trajectory<&'ext [f64], &'ext [Count], &'ext [u32]>>,
         reactions: &'other ReactionNetwork,
+        rng: &'other mut Rng,
     ) -> Self {
         Self {
             current_time: 0.0,
@@ -282,6 +269,7 @@ impl<'ext, 'other> Simulation<'ext, 'other> {
             components,
             ext_trajectory,
             reactions,
+            rng,
         }
     }
 
@@ -315,6 +303,21 @@ impl<'ext, 'other> Simulation<'ext, 'other> {
         traj.get_component(comp_num)[index]
     }
 
+    pub fn select_reaction(&mut self) -> usize {
+        let r: f64 = self.rng.gen();
+        let total_propensity: f64 = self.propensities.iter().sum();
+
+        let mut selected_reaction = 0;
+        let mut acc = self.propensities[0] / total_propensity;
+
+        while r > acc && selected_reaction + 1 < self.propensities.len() {
+            selected_reaction += 1;
+            acc += self.propensities[selected_reaction] / total_propensity;
+        }
+
+        selected_reaction
+    }
+
     pub fn update_components(&mut self, selected_reaction: usize) {
         for &reactant in &self.reactions.reactants[selected_reaction] {
             if let Some(reactant) = reactant {
@@ -329,7 +332,7 @@ impl<'ext, 'other> Simulation<'ext, 'other> {
     }
 
     pub fn propagate_time(&mut self) -> (f64, usize) {
-        let mut random_variate = -rand::random::<f64>().ln();
+        let mut random_variate = -self.rng.gen::<f64>().ln();
 
         loop {
             calc_propensities(&mut self.propensities, &self.components, &self.reactions);
@@ -344,7 +347,7 @@ impl<'ext, 'other> Simulation<'ext, 'other> {
             self.current_time += timestep;
 
             if perform_reaction {
-                let selected_reaction = select_reaction(&self.propensities);
+                let selected_reaction = self.select_reaction();
                 self.update_components(selected_reaction);
                 return (self.current_time, selected_reaction);
             } else {
@@ -367,6 +370,7 @@ pub fn simulate(
     initial_values: &[f64],
     reactions: &ReactionNetwork,
     ext_trajectory: Option<TrajectoryArray<&[f64], &[f64], &[u32]>>,
+    rng: &mut impl rand::Rng,
 ) -> SimulatedTrajectoryArray {
     let mut propensities = vec![0.0; reactions.len()];
     let mut components = initial_values.to_owned();
@@ -396,6 +400,7 @@ pub fn simulate(
                 .as_ref()
                 .map(|x| x.get(i % num_ext_trajectories)),
             reactions,
+            rng,
         );
 
         let mut sim_traj = ta.get_mut(i);
