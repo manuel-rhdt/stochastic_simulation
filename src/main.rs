@@ -75,12 +75,22 @@ fn marginal_likelihood(
         result.as_slice_mut().unwrap(),
     );
 
-    result.map_axis(Axis(0), logsumexp) - (signals_pre.len() as f64).ln()
+    result.map_axis(Axis(0), logmeanexp)
 }
 
-pub fn logsumexp(values: ArrayView1<f64>) -> f64 {
+pub fn logmeanexp(values: ArrayView1<f64>) -> f64 {
+    use std::ops::Div;
+
     let max = values.fold(std::f64::NEG_INFINITY, |a, &b| a.max(b));
-    values.iter().map(|&x| (x - max).exp()).sum::<f64>().ln() + max
+    let count_non_nan = values.iter().filter(|x| !x.is_nan()).count() as f64;
+    values
+        .iter()
+        .filter(|x| !x.is_nan())
+        .map(|&x| (x - max).exp())
+        .sum::<f64>()
+        .div(count_non_nan)
+        .ln()
+        + max
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
