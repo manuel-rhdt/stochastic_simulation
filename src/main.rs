@@ -1,19 +1,30 @@
 mod gillespie;
 mod likelihood;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
 use std::io::prelude::*;
 use std::path::PathBuf;
 
 use gillespie::{simulate, ReactionNetwork, TrajectoryArray, MAX_NUM_PRODUCTS, MAX_NUM_REACTANTS};
 use likelihood::log_likelihood;
 
+use base64;
 use ndarray::{Array, Array1, Array2, Array3, ArrayView1, Axis};
 use ndarray_npy::WriteNpyExt;
 use rayon;
 use rayon::prelude::*;
 use serde::Deserialize;
 use toml;
+
+fn calculate_hash<T: Hash>(t: &T) -> String {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    let val = s.finish();
+    let array: [u8; 8] = unsafe { std::mem::transmute(val) };
+    base64::encode_config(&array, base64::URL_SAFE_NO_PAD)
+}
 
 fn conditional_likelihood(
     traj_lengths: &[f64],
@@ -68,11 +79,11 @@ fn marginal_likelihood(
 }
 
 pub fn logsumexp(values: ArrayView1<f64>) -> f64 {
-    let max = values.fold(0.0_f64, |a, &b| a.max(b));
+    let max = values.fold(std::f64::NEG_INFINITY, |a, &b| a.max(b));
     values.iter().map(|&x| (x - max).exp()).sum::<f64>().ln() + max
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 struct Config {
     output: PathBuf,
     batch_size: usize,
@@ -83,19 +94,19 @@ struct Config {
     response: ConfigReactionNetwork,
 }
 
-#[derive(Deserialize, Debug, Copy, Clone)]
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 struct ConfigConditionalEntropy {
     num_signals: usize,
     responses_per_signal: usize,
 }
 
-#[derive(Deserialize, Debug, Copy, Clone)]
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 struct ConfigMarginalEntropy {
     num_signals: usize,
     num_responses: usize,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 struct ConfigReactionNetwork {
     initial: f64,
     components: Vec<String>,
@@ -155,11 +166,16 @@ impl ConfigReactionNetwork {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 struct Reaction {
     k: f64,
     reactants: Vec<String>,
     products: Vec<String>,
+}
+
+enum EntropyType {
+    Conditional,
+    Marginal,
 }
 
 fn main() -> std::io::Result<()> {
@@ -173,8 +189,39 @@ fn main() -> std::io::Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
         other => return other,
     }
-    let mut config_file_copy = File::create(conf.output.join("info.toml"))?;
-    write!(config_file_copy, "{}", contents)?;
+    let info_toml_path = &conf.output.join("info.toml");
+
+    let worker_id = std::env::var("GILLESPIE_WORKER_ID")
+        .ok()
+        .map(|val| calculate_hash(&val));
+
+    match fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(info_toml_path)
+    {
+        Ok(mut config_file_copy) => write!(config_file_copy, "{}", contents)?,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            // sleep a little so the other workers have time to write the info.toml
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            let mut info_toml = File::open(info_toml_path)?;
+            let mut contents = String::new();
+            info_toml.read_to_string(&mut contents)?;
+            let other_conf: Config = toml::from_str(&contents)?;
+
+            if other_conf == conf {
+                println!("configuration.toml matches existing info.toml");
+            } else {
+                panic!("{:?} does not match configuration.toml", info_toml_path);
+            }
+
+            if worker_id.is_none() {
+                panic!("Please set GILLESPIE_WORKER_ID to run multiple jobs in parallel");
+            }
+        }
+        Err(other) => return Err(other),
+    }
 
     let sig_network = conf.signal.to_reaction_network();
     let res_network = conf.response.to_reaction_network();
@@ -183,7 +230,7 @@ fn main() -> std::io::Result<()> {
 
     let traj_lengths = Array::linspace(0.0, 600.0, length);
 
-    rayon::iter::repeatn((), conf.conditional_entropy.num_signals)
+    let ce_chunks = rayon::iter::repeatn((), conf.conditional_entropy.num_signals)
         .map(|_| {
             -conditional_likelihood(
                 traj_lengths.as_slice().unwrap(),
@@ -195,20 +242,8 @@ fn main() -> std::io::Result<()> {
             )
         })
         .chunks(conf.batch_size)
-        .enumerate()
-        .for_each(|(chunk_num, log_lh)| {
-            let mut array = Array2::zeros((conf.batch_size, traj_lengths.len()));
-            for (mut row, ll) in array.outer_iter_mut().zip(log_lh.iter()) {
-                row.assign(ll);
-            }
-            if let Ok(out_file) = File::create(conf.output.join(format!("ce{:?}.npy", chunk_num))) {
-                array.write_npy(out_file).expect("could not write npy");
-            }
-        });
+        .enumerate();
 
-    // =============================
-    // MARGINAL ENTROPY
-    // =============================
     let signals_pre = simulate(
         conf.marginal_entropy.num_signals,
         length,
@@ -216,7 +251,8 @@ fn main() -> std::io::Result<()> {
         &sig_network,
         None,
     );
-    rayon::iter::repeatn((), conf.marginal_entropy.num_responses)
+
+    let me_chunks = rayon::iter::repeatn((), conf.marginal_entropy.num_responses)
         .map(|_| {
             -marginal_likelihood(
                 traj_lengths.as_slice().unwrap(),
@@ -227,14 +263,27 @@ fn main() -> std::io::Result<()> {
             )
         })
         .chunks(conf.batch_size)
-        .enumerate()
-        .for_each(|(chunk_num, log_lh)| {
+        .enumerate();
+
+    ce_chunks
+        .map(|(chunk_num, log_lh)| (EntropyType::Conditional, chunk_num, log_lh))
+        .chain(me_chunks.map(|(chunk_num, log_lh)| (EntropyType::Marginal, chunk_num, log_lh)))
+        .for_each(|(entropy_type, chunk_num, log_lh)| {
             let mut array = Array2::zeros((conf.batch_size, traj_lengths.len()));
             for (mut row, ll) in array.outer_iter_mut().zip(log_lh.iter()) {
                 row.assign(ll);
             }
-            if let Ok(out_file) = File::create(conf.output.join(format!("me{:?}.npy", chunk_num))) {
+
+            let worker_id = worker_id.as_ref().map(std::ops::Deref::deref).unwrap_or("");
+            let filename = match entropy_type {
+                EntropyType::Conditional => format!("ce{}-{:?}.npy", worker_id, chunk_num),
+                EntropyType::Marginal => format!("me{}-{:?}.npy", worker_id, chunk_num),
+            };
+
+            if let Ok(out_file) = File::create(conf.output.join(&filename)) {
                 array.write_npy(out_file).expect("could not write npy");
+            } else {
+                panic!("could not write chunk {:?}", &filename);
             }
         });
 
