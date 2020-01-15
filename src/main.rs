@@ -102,7 +102,7 @@ pub fn logmeanexp(values: ArrayView1<f64>) -> f64 {
         + max
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Hash)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 struct Config {
     output: PathBuf,
     batch_size: usize,
@@ -111,6 +111,22 @@ struct Config {
     marginal_entropy: ConfigMarginalEntropy,
     signal: ConfigReactionNetwork,
     response: ConfigReactionNetwork,
+}
+
+impl Config {
+    pub fn hash_relevant<H: Hasher>(&self, hasher: &mut H) {
+        self.length.hash(hasher);
+        self.conditional_entropy.hash(hasher);
+        self.marginal_entropy.hash(hasher);
+        self.signal.hash(hasher);
+        self.response.hash(hasher);
+    }
+
+    pub fn get_relevant_hash(&self) -> u64 {
+        let mut s = DefaultHasher::new();
+        self.hash_relevant(&mut s);
+        s.finish()
+    }
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -266,7 +282,7 @@ fn main() -> std::io::Result<()> {
         .join(&format!("{}", worker_name.as_deref().unwrap_or("default")));
     fs::create_dir(worker_dir)?;
 
-    let seed_base = calculate_hash(&conf) ^ calculate_hash(&worker_name);
+    let seed_base = conf.get_relevant_hash() ^ calculate_hash(&worker_name);
 
     let sig_network = conf.signal.to_reaction_network();
     let res_network = conf.response.to_reaction_network();
