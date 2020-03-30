@@ -1,0 +1,49 @@
+output = 'testrun1'
+batch_size = 50
+length = 800.0
+num_trajectory_lengths = 500
+
+[conditional_entropy]
+num_signals = 100
+responses_per_signal = 1_000
+
+[marginal_entropy]
+num_signals = 1_000
+num_responses = 100
+
+[signal]
+initial = 50
+mean = 50
+components = ['S']
+
+[[signal.reactions]]
+k = 0.25 # use the previously defined variable
+reactants = []
+products = ['S']
+
+[[signal.reactions]]
+k = 0.005
+reactants = ['S']
+products = []
+
+[response]
+initial = 50
+mean = 50
+components = ['X']
+
+[[response.reactions]]
+k = 0.01
+reactants = ['S']
+products = ['S', 'X']
+
+[[response.reactions]]
+k = 0.01
+reactants = ['X']
+products = []
+
+[attributes]
+title = """Simulation results for mutual information between two trajectories, 
+generated according to a specific chemical reaction network."""
+institution = "AMOLF, Amsterdam, NL"
+creator_name = "Manuel Reinhardt"
+creator_email = "reinhardt@amolf.nl"
