@@ -1,6 +1,6 @@
 [package]
 name = "accelerate"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Manuel Reinhardt <M.Reinhardt@amolf.nl>"]
 edition = "2018"
 
@@ -9,23 +9,23 @@ name = "accelerate"
 
 [dependencies]
 rand = "0.7.3"
-toml = "0.5"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-ndarray = {version = "0.13", features = ["rayon"]}
-rayon = "1.3"
+toml = "0.5.6"
+serde = { version = "1.0.105", features = ["derive"] }
+serde_json = "1.0.50"
+ndarray = { version = "0.13.0", features = ["rayon"] }
+rayon = "1.3.0"
 rand_pcg = "0.2.1"
-arrayvec = "0.5"
-jemallocator = "0.3.0"
-chrono = "0.4.10"
-ryu = "1"
-ctrlc = { version = "3.0", features = ["termination"] }
-log = { version = "0.4", features = ["max_level_debug", "release_max_level_debug"] }
+arrayvec = "0.5.1"
+jemallocator = "0.3.2"
+chrono = "0.4.11"
+ryu = "1.0.3"
+ctrlc = { version = "3.1.4", features = ["termination"] }
+log = { version = "0.4.8", features = ["max_level_debug", "release_max_level_debug"] }
 env_logger = "0.7.1"
-tera = { version = "1", default-features = false }
+tera = { version = "1.2.0", default-features = false }
 ndarray-stats = "0.3.0"
-noisy_float = "0.1.11"
-netcdf = "0.4"
+noisy_float = "0.1.12"
+netcdf = "0.4.1"
 jemalloc-ctl = "0.3.3"
 
 [profile.dev]
@@ -36,10 +36,10 @@ opt-level = 3
 debug = true
 
 [build-dependencies]
-vergen = "3"
+vergen = "3.1.0"
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.3.1"
 
 [[bench]]
 name = "simulate"
