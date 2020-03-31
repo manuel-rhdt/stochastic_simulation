@@ -20,12 +20,17 @@ jemallocator = "0.3.2"
 chrono = "0.4.11"
 ryu = "1.0.3"
 ctrlc = { version = "3.1.4", features = ["termination"] }
-log = { version = "0.4.8", features = ["max_level_debug", "release_max_level_debug"] }
+log = { version = "0.4.8", features = [
+    "max_level_debug",
+    "release_max_level_debug"
+] }
 env_logger = "0.7.1"
 tera = { version = "1.2.0", default-features = false }
 ndarray-stats = "0.3.0"
 noisy_float = "0.1.12"
-netcdf = "0.4.1"
+netcdf = { git = "https://github.com/magnusuMET/rust-netcdf", branch = "vendor", features = [
+    "static"
+] }
 jemalloc-ctl = "0.3.3"
 
 [profile.dev]
@@ -44,3 +49,7 @@ criterion = "0.3.1"
 [[bench]]
 name = "simulate"
 harness = false
+
+[patch]
+[patch.crates-io]
+hdf5-sys = { git = "https://github.com/magnusuMET/hdf5-rust", branch = "feature/static_build" }
