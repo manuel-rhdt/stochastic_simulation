@@ -91,7 +91,7 @@ where
                         * sum_of_reaction_propensities(&self.components, self.reactions);
                     break Some((delta_t, event_prop, integrated_propensity));
                 } else {
-                    // the signal will change before the response, therefore we havet to
+                    // the signal will change before the response, therefore we have to
                     // - keep track of time
                     // - integrate the propensity for the amount of time that the signal is const
                     // - update the signal
@@ -133,25 +133,55 @@ fn log_likelihood_inner<'a>(
     )
 }
 
+// bin a trajectory to specific times. bins must be an increasing sequence.
+fn bin<'a>(
+    iter: impl 'a + Iterator<Item = (f64, f64)>,
+    bins: impl 'a + Iterator<Item = f64>,
+) -> impl 'a + Iterator<Item = f64> {
+    let mut peekable = iter.peekable();
+    bins.scan(0.0, move |acc, bin_edge| {
+        while let Some(&(t, lh)) = peekable.peek() {
+            if t <= bin_edge {
+                *acc = lh;
+            }
+            if t >= bin_edge {
+                return Some(*acc);
+            } else {
+                peekable.next();
+            }
+        }
+        None
+    })
+}
+
 pub fn log_likelihood<'a>(
     traj_lengths: &'a [f64],
     signal: impl 'a + TrajectoryIterator<Ex = u32>,
     response: impl 'a + TrajectoryIterator<Ex = u32>,
     reactions: &'a ReactionNetwork,
 ) -> impl 'a + Iterator<Item = f64> {
-    let mut ll_iter = log_likelihood_inner(signal, response, reactions).peekable();
+    let ll_iter = log_likelihood_inner(signal, response, reactions);
+    bin(ll_iter, traj_lengths.iter().cloned())
+}
 
-    let bin_iter = traj_lengths.iter();
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    bin_iter.scan(0.0, move |acc, &bin_edge| {
-        while let Some(&(t, lh)) = ll_iter.peek() {
-            if t < bin_edge {
-                *acc = lh;
-                ll_iter.next();
-            } else {
-                return Some(*acc);
-            }
-        }
-        None
-    })
+    fn bin_slices(vals: &[(f64, f64)], bins: &[f64]) -> Vec<f64> {
+        bin(vals.iter().cloned(), bins.iter().cloned()).collect()
+    }
+
+    #[test]
+    fn test_binning() {
+        let traj = vec![(1.0, 5.0), (2.0, 10.0), (3.0, 20.0)];
+        assert_eq!(
+            bin_slices(&traj, &[0.0, 1.5, 2.9, 3.0, 4.0]),
+            [0.0, 5.0, 10.0, 20.0]
+        );
+        assert_eq!(
+            bin_slices(&traj, &[1.0, 1.0, 1.5, 1.5]),
+            [5.0, 5.0, 5.0, 5.0]
+        );
+    }
 }
