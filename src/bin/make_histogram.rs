@@ -63,14 +63,21 @@ fn marginal_likelihood(
     (single_likelihood, likelihoods)
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct Output {
     single: Vec<f64>,
     marginal: Vec<Vec<f64>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct Record {
+    duration: f64,
+    log_likelihood: f64,
+    sampled_from: &'static str,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let conf = configuration::parse_configuration("benches/configuration.toml")?;
+    let conf = configuration::parse_configuration("configuration.toml")?;
 
     let traj_lengths = Array::linspace(0.0, conf.length, conf.num_trajectory_lengths);
 
@@ -78,10 +85,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (cond, marg) = marginal_likelihood(traj_lengths.as_slice().unwrap(), 10000, &mut coord);
 
-    let outp = Output {
-        single: cond.to_vec(),
-        marginal: marg.outer_iter().map(|x| x.to_vec()).collect(),
-    };
+    let mut outp = vec![];
+    for (&val, &duration) in cond.iter().zip(traj_lengths.iter()) {
+        outp.push(Record {
+            duration,
+            log_likelihood: val,
+            sampled_from: "posterior",
+        })
+    }
+
+    for traj in marg.outer_iter() {
+        for (&val, &duration) in traj.iter().zip(traj_lengths.iter()) {
+            outp.push(Record {
+                duration,
+                log_likelihood: val,
+                sampled_from: "prior",
+            })
+        }
+    }
 
     let outp = serde_json::to_string(&outp)?;
 
