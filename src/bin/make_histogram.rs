@@ -6,7 +6,6 @@ use accelerate::{
 
 use std::io::Write;
 
-use ndarray::{Array, Array1, Array2};
 use serde::Serialize;
 use serde_json;
 
@@ -16,49 +15,36 @@ use rand_pcg::Pcg64Mcg;
 use rayon::prelude::*;
 
 fn marginal_likelihood(
-    traj_lengths: &[f64],
     num_signals: usize,
     coordinator: &mut SimulationCoordinator<Pcg64Mcg>,
-) -> (Array1<f64>, Array2<f64>) {
+) -> (Vec<(f64, f64)>, Vec<Vec<(f64, f64)>>) {
     let sig = coordinator.generate_signal().collect();
     let res = coordinator.generate_response(sig.iter()).collect();
 
     let single_likelihood = {
         let kde = coordinator.equilibrate_respones_dist(sig.iter().components());
         let logp = kde.pdf(res.iter().components()[0]).ln();
-        log_likelihood(
-            traj_lengths,
-            sig.iter(),
-            res.iter(),
-            &coordinator.res_network,
-        )
-        .map(|x| x + logp)
-        .collect()
+        log_likelihood(sig.iter(), res.iter(), &coordinator.res_network)
+            .map(|(t, x)| (t, x + logp))
+            .collect()
     };
-
-    let mut likelihoods = Array2::zeros((num_signals, traj_lengths.len()));
 
     let signals: Vec<_> = (0..num_signals)
         .map(|_| coordinator.generate_signal().collect())
         .collect();
+
+    let mut likelihoods = vec![];
     signals
         .into_par_iter()
-        .zip(likelihoods.outer_iter_mut())
-        .for_each_with(coordinator.clone(), |coordinator, (sig, out)| {
+        .map_with(coordinator.clone(), |coordinator, sig| {
             coordinator.rng = Pcg64Mcg::from_entropy();
             let kde = coordinator.equilibrate_respones_dist(sig.iter().components());
             let logp = kde.pdf(res.iter().components()[0]).ln();
-            for (ll, out) in log_likelihood(
-                traj_lengths,
-                sig.iter(),
-                res.iter(),
-                &coordinator.res_network,
-            )
-            .zip(out)
-            {
-                *out = logp + ll;
-            }
-        });
+            log_likelihood(sig.iter(), res.iter(), &coordinator.res_network)
+                .map(|(t, x)| (t, x + logp))
+                .collect()
+        })
+        .collect_into_vec(&mut likelihoods);
 
     (single_likelihood, likelihoods)
 }
@@ -79,14 +65,12 @@ struct Record {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let conf = configuration::parse_configuration("configuration.toml")?;
 
-    let traj_lengths = Array::linspace(0.0, conf.length, conf.num_trajectory_lengths);
-
     let mut coord = conf.create_coordinator(1234);
 
-    let (cond, marg) = marginal_likelihood(traj_lengths.as_slice().unwrap(), 10000, &mut coord);
+    let (cond, marg) = marginal_likelihood(10000, &mut coord);
 
     let mut outp = vec![];
-    for (&val, &duration) in cond.iter().zip(traj_lengths.iter()) {
+    for &(duration, val) in cond.iter() {
         outp.push(Record {
             duration,
             log_likelihood: val,
@@ -94,8 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     }
 
-    for traj in marg.outer_iter() {
-        for (&val, &duration) in traj.iter().zip(traj_lengths.iter()) {
+    for traj in marg.iter() {
+        for &(duration, val) in traj.iter() {
             outp.push(Record {
                 duration,
                 log_likelihood: val,

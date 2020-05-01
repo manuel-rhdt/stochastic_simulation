@@ -14,7 +14,7 @@ use std::sync::{
 
 use configuration::{calculate_hash, create_dir_if_not_exists, parse_configuration, Config};
 use gillespie::{SimulationCoordinator, Trajectory, TrajectoryIterator};
-use likelihood::log_likelihood;
+use likelihood::log_likelihood_binned;
 
 use ndarray::{array, Array, Array1, Array2, Axis};
 use netcdf;
@@ -78,7 +78,9 @@ fn conditional_likelihood(
         }
         let res = coordinator.generate_response(sig.iter());
         let log_p0 = kde.pdf(res.components()[0]).ln();
-        for (ll, out) in log_likelihood(traj_lengths, sig.iter(), res, &res_network).zip(&mut out) {
+        for (ll, out) in
+            log_likelihood_binned(traj_lengths, sig.iter(), res, &res_network).zip(&mut out)
+        {
             *out = log_p0 + ll;
         }
     }
@@ -108,7 +110,7 @@ fn marginal_likelihood(
             check_abort_signal!((array![], array![]));
         }
         let logp = kde.pdf(res.iter().components()[0]).ln();
-        for (ll, out) in log_likelihood(
+        for (ll, out) in log_likelihood_binned(
             traj_lengths,
             sig.iter(),
             res.iter(),

@@ -117,7 +117,7 @@ where
 
 /// Returns an Iterator over pairs of timestamps and log_likelihoood values.
 ///
-fn log_likelihood_inner<'a>(
+pub fn log_likelihood<'a>(
     signal: impl 'a + TrajectoryIterator<Ex = u32>,
     response: impl 'a + TrajectoryIterator<Ex = u32>,
     reactions: &'a ReactionNetwork,
@@ -154,13 +154,13 @@ fn bin<'a>(
     })
 }
 
-pub fn log_likelihood<'a>(
+pub fn log_likelihood_binned<'a>(
     traj_lengths: &'a [f64],
     signal: impl 'a + TrajectoryIterator<Ex = u32>,
     response: impl 'a + TrajectoryIterator<Ex = u32>,
     reactions: &'a ReactionNetwork,
 ) -> impl 'a + Iterator<Item = f64> {
-    let ll_iter = log_likelihood_inner(signal, response, reactions);
+    let ll_iter = log_likelihood(signal, response, reactions);
     bin(ll_iter, traj_lengths.iter().cloned())
 }
 

@@ -1,6 +1,6 @@
 use accelerate::configuration::parse_configuration;
 use accelerate::gillespie::TrajectoryIterator;
-use accelerate::likelihood::log_likelihood;
+use accelerate::likelihood::log_likelihood_binned;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -26,7 +26,7 @@ fn bench_simulate(c: &mut Criterion) {
         .collect();
     c.bench_function("log_likelihood", |b| {
         b.iter(|| {
-            log_likelihood(
+            log_likelihood_binned(
                 &traj_lengths,
                 sig.iter(),
                 res.iter(),
