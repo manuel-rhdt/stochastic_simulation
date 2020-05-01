@@ -17,7 +17,7 @@ mean = 50
 components = ['S']
 
 [[signal.reactions]]
-k = 0.25 # use the previously defined variable
+k = 0.25
 reactants = []
 products = ['S']
 
