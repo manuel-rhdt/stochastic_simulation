@@ -16,7 +16,7 @@ jobs:
     - stage: deploy
       if: tag IS present
       script: cargo build --verbose --release
-      after-script: 
+      after_script: 
         cp target/release/accelerate accelerate-linux
       deploy:
         provider: releases
@@ -30,7 +30,7 @@ jobs:
       os: osx
       if: tag IS present
       script: cargo build --verbose --release
-      after-script:
+      after_script:
         cp target/release/accelerate accelerate-osx
       deploy:
         provider: releases
