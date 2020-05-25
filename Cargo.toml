@@ -16,7 +16,6 @@ ndarray = { version = "0.13.0", features = ["rayon"] }
 rayon = "1.3.0"
 rand_pcg = "0.2.1"
 arrayvec = "0.5.1"
-jemallocator = "0.3.2"
 chrono = "0.4.11"
 ryu = "1.0.3"
 ctrlc = { version = "3.1.4", features = ["termination"] }
@@ -31,7 +30,10 @@ noisy_float = "0.1.12"
 netcdf = { git = "https://github.com/magnusuMET/rust-netcdf", branch = "vendor", features = [
     "static"
 ] }
-jemalloc-ctl = "0.3.3"
+
+# [target.'cfg(not(target_env = "msvc"))'.dependencies]
+# jemallocator = { version = "0.3.0", features = ["stats"] }
+# # jemalloc-ctl = { version = "0.3.2"}
 
 [profile.dev]
 opt-level = 0

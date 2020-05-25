@@ -25,10 +25,10 @@ use rayon::prelude::*;
 use serde::Serialize;
 use toml;
 
-use jemalloc_ctl::{epoch, stats};
+// use jemalloc_ctl::{epoch, stats};
 
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+// #[global_allocator]
+// static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 static MEMORY_LIMIT: AtomicU64 = AtomicU64::new(0);
 static UNCAUGHT_SIGNAL: AtomicBool = AtomicBool::new(false);
@@ -36,13 +36,13 @@ static UNCAUGHT_SIGNAL: AtomicBool = AtomicBool::new(false);
 fn check_oom() {
     let limit = MEMORY_LIMIT.load(Ordering::Relaxed);
     if limit != 0 {
-        epoch::advance().unwrap();
-        let allocated = stats::allocated::read().unwrap() as u64;
-        log::debug!("allocated memory: {}", allocated);
-        if allocated > limit {
-            log::error!("used too much memory: {} > {}", allocated, limit);
-            UNCAUGHT_SIGNAL.store(true, Ordering::SeqCst);
-        }
+        // epoch::advance().unwrap();
+        // let allocated = stats::allocated::read().unwrap() as u64;
+        // log::debug!("allocated memory: {}", allocated);
+        // if allocated > limit {
+        //     log::error!("used too much memory: {} > {}", allocated, limit);
+        //     UNCAUGHT_SIGNAL.store(true, Ordering::SeqCst);
+        // }
     }
 }
 
