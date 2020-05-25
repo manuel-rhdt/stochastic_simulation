@@ -22,4 +22,14 @@ jobs:
         edge: true
         token: $GITHUB_TOKEN
         file: target/release/accelerate
-        draft: true
+
+    - stage: deploy
+      os: osx
+      if: tag IS present
+      script: skip
+      install: cargo build --verbose --release
+      deploy:
+        provider: releases
+        edge: true
+        token: $GITHUB_TOKEN
+        file: target/release/accelerate
