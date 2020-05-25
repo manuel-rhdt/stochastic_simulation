@@ -16,7 +16,7 @@ jobs:
     - stage: deploy
       if: tag IS present
       script: cargo build --verbose --release
-      after_script: 
+      before-deploy: 
         cp target/release/accelerate accelerate-linux
       deploy:
         provider: releases
@@ -25,12 +25,13 @@ jobs:
         file: accelerate-linux
         on:
           all_branches: true
+      skip_cleanup: true
 
     - stage: deploy
       os: osx
       if: tag IS present
       script: cargo build --verbose --release
-      after_script:
+      before-deploy:
         cp target/release/accelerate accelerate-osx
       deploy:
         provider: releases
@@ -39,3 +40,4 @@ jobs:
         file: accelerate-osx
         on:
           all_branches: true
+      skip_cleanup: true
