@@ -23,6 +23,8 @@ jobs:
         edge: true
         token: $GITHUB_TOKEN
         file: accelerate-linux
+        on:
+          all_branches: true
 
     - stage: deploy
       os: osx
@@ -35,3 +37,5 @@ jobs:
         edge: true
         token: $GITHUB_TOKEN
         file: accelerate-osx
+        on:
+          all_branches: true
