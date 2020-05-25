@@ -1,0 +1,24 @@
+os:
+  - linux
+  - osx
+  - windows
+
+language: rust
+
+rust:
+  - stable
+
+cache: cargo
+
+jobs:
+  include:
+    - stage: deploy
+      if: tag IS present
+      script: skip
+      install: cargo build --verbose --release
+      deploy:
+        provider: releases
+        edge: true
+        token: $GITHUB_TOKEN
+        file: target/release/accelerate
+        draft: true
