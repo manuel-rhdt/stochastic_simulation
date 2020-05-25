@@ -15,21 +15,23 @@ jobs:
   include:
     - stage: deploy
       if: tag IS present
-      script: skip
-      install: cargo build --verbose --release
+      script: cargo build --verbose --release
+      after-script: 
+        cp target/release/accelerate accelerate-linux
       deploy:
         provider: releases
         edge: true
         token: $GITHUB_TOKEN
-        file: target/release/accelerate
+        file: accelerate-linux
 
     - stage: deploy
       os: osx
       if: tag IS present
-      script: skip
-      install: cargo build --verbose --release
+      script: cargo build --verbose --release
+      after-script:
+        cp target/release/accelerate accelerate-osx
       deploy:
         provider: releases
         edge: true
         token: $GITHUB_TOKEN
-        file: target/release/accelerate
+        file: accelerate-osx
