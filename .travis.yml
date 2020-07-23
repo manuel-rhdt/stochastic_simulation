@@ -2,7 +2,7 @@ os:
   - linux
   - osx
 
-dist: xenial
+dist: trusty
 
 language: rust
 
@@ -26,25 +26,26 @@ jobs:
         on:
           all_branches: true
 
-    - stage: deploy
-      if: tag IS present
-      env: TARGET=x86_64-unknown-linux-musl
-      install: rustup target add $TARGET
-      script: cargo build --verbose --release --target $TARGET
-      addons:
-        apt:
-          packages:
-            - musl
-            - musl-dev
-            - musl-tools
-      before_deploy: cp target/release/accelerate accelerate-linux-musl
-      deploy:
-        provider: releases
-        edge: true
-        token: $GITHUB_TOKEN
-        file: accelerate-linux-musl
-        on:
-          all_branches: true
+    # MUSL does not work with HDF5
+    # - stage: deploy
+    #   if: tag IS present
+    #   env: TARGET=x86_64-unknown-linux-musl
+    #   install: rustup target add $TARGET
+    #   script: cargo build --verbose --release --target $TARGET
+    #   addons:
+    #     apt:
+    #       packages:
+    #         - musl
+    #         - musl-dev
+    #         - musl-tools
+    #   before_deploy: cp target/x86_64-unknown-linux-musl/release/accelerate accelerate-linux-musl
+    #   deploy:
+    #     provider: releases
+    #     edge: true
+    #     token: $GITHUB_TOKEN
+    #     file: accelerate-linux-musl
+    #     on:
+    #       all_branches: true
 
     - stage: deploy
       os: osx
