@@ -15,9 +15,9 @@ jobs:
   include:
     - stage: deploy
       if: tag IS present
+      install: skip
       script: cargo build --verbose --release
-      before-deploy: 
-        cp target/release/accelerate accelerate-linux
+      before_deploy: cp target/release/accelerate accelerate-linux
       deploy:
         provider: releases
         edge: true
@@ -25,14 +25,33 @@ jobs:
         file: accelerate-linux
         on:
           all_branches: true
-      skip_cleanup: true
+
+    - stage: deploy
+      if: tag IS present
+      env: TARGET=x86_64-unknown-linux-musl
+      install: rustup target add $TARGET
+      script: cargo build --verbose --release --target $TARGET
+      addons:
+        apt:
+          packages:
+            - musl
+            - musl-dev
+            - musl-tools
+      before_deploy: cp target/release/accelerate accelerate-linux-musl
+      deploy:
+        provider: releases
+        edge: true
+        token: $GITHUB_TOKEN
+        file: accelerate-linux-musl
+        on:
+          all_branches: true
 
     - stage: deploy
       os: osx
       if: tag IS present
+      install: skip
       script: cargo build --verbose --release
-      before-deploy:
-        cp target/release/accelerate accelerate-osx
+      before_deploy: cp target/release/accelerate accelerate-osx
       deploy:
         provider: releases
         edge: true
@@ -40,4 +59,3 @@ jobs:
         file: accelerate-osx
         on:
           all_branches: true
-      skip_cleanup: true
